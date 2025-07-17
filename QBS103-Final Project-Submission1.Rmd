@@ -1,0 +1,81 @@
+---
+title: "Untitled"
+output:
+  pdf_document: default
+  html_document: default
+date: "2025-07-15"
+---
+
+```{r setup, include=FALSE}
+# library(tidyverse) #need for ggplot and pipes
+
+gene_expression <- read.csv("QBS103_GSE157103_genes.csv")
+metadata_file <- read.csv("QBS103_GSE157103_series_matrix-1.csv")
+# colnames(medadata_file) had to get column names from file to find the correct column to get gene name and rows.
+```
+
+```{r}
+aamp_expression <- gene_expression %>% 
+  filter(X == "AAMP") %>% # these two lines are taking the data from the gene expression csv and filtering the X column for AAMP expression.
+  pivot_longer(cols = -X, #selecting all columns other than X and moving them
+               names_to = "sample_ids",
+               values_to = "AAMP_gene_expression") %>% # I had a hard time moving and formatting the data into long, so put my code into dartmouth.chat to ask what was wrong with it, and it fixed the names_to and values_to. 
+  select(sample_ids, AAMP_gene_expression) #converting our data from wide to long format for ggplot  
+  head(aamp_expression) #I just wanted to make sure it was formatted and looked okay.
+```
+```{r}
+metadata_ready <- metadata_file %>%
+  select(subject_id = participant_id,
+        age = age, #taking the columns from file and naming them, also selecting for them within the table. 
+         sex = sex,
+         icu_status = icu_status) %>%
+  mutate(age = as.numeric(age), #I at first didn't do this mutate step and had to ask dartmouth.chat why my data wasn't visualizing properly
+         sex = as.factor(sex), 
+         icu_status = as.factor(icu_status))
+full_data <- aamp_expression %>%
+  left_join(metadata_ready, by = c('sample_ids' = 'subject_id')) #had to ask chat how to ensure the sample_ids and participant_ids were added together, and how to add them to the left/first column of the table. 
+head(metadata_ready) #checking to make sure table looks good
+```
+```{r}
+cleaned_data <- full_data %>%
+  drop_na(age, AAMP_gene_expression, sex, icu_status) %>%  # removing all the rows with NA values in all of my variables. #realized I had to take out the na values in the table once I saw the head of the table above.
+  mutate(sex = str_trim(tolower(as.character(sex)))) %>%  # tried to use many other functions in class, like ifelse and limiting the lists, but could not remove the 'unknown' in the sex column- so I had to ask dartmouth.chat how to remove it, and it gave me this code. But this line makes the sex a character, and converts the row to all lowercase and removes any spaces before or after the sex in the column. I had to use this code, otherwise I wouldn't be able to find and remove the 'unknown' in the sex column. 
+  filter(!sex %in% c("unknown", "", NA)) #this is remoing the unknown or NA in the sex column. the !sex is saying remove whatever is in the parenthesis. 
+
+head(cleaned_data)        # checking first few rows. 
+table(cleaned_data$sex)   # checking table to make sure unknown is removed. 
+```
+```{r}
+library(wesanderson)
+# histogram of AAMP gene expression: 
+ggplot(full_data, aes(x = AAMP_gene_expression)) + # I added a y axis in here, btu kept getting an error and had to ask chat.dartmouth why it was not working- I ended up removing the y axis since it says that was self-explanatory in the histogram coding. 
+  geom_histogram(fill = wes_palette("Moonrise3")[1], color = "white") + #my colors weren't showing up since I didnt put [1] and had to ask chat why the graph was blank even with the wesanderson palette called.
+  theme_classic() +
+  labs(title = "AAMP Gene Expression per Sample", x = "Gene Expression Level", y = "Counts/Expression in Samples")
+```
+```{r}
+# scatterplot for gene expression and age (which is continous variant)
+library(wesanderson)
+ggplot(cleaned_data, aes(x = age, y = AAMP_gene_expression)) + 
+  geom_point(color = wes_palette("Moonrise3")[2]) + # pretty much followed the exact code from class examples. 
+  theme_classic() +
+  labs(title = "AAMP Gene Expression vs. Age", x = "Age", y = "AAMP Gene Expression")
+```
+
+
+```{r}
+library(wesanderson)
+ggplot(cleaned_data, aes(x = sex, y = AAMP_gene_expression, fill = icu_status)) +
+  geom_boxplot() +
+  theme_classic() + #also followed almost exact code from class.
+  labs(title = "AAMP Gene Expression per Sex and ICU Status", x = "Sex", y = "AAMP Gene Expression") +
+  scale_fill_manual(name = "Subject ICU Status", values = wes_palette("Moonrise3", n = 2))
+```
+
+
+
+
+
+
+
+
