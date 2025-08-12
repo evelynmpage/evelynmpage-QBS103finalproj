@@ -1,0 +1,125 @@
+---
+title: "QBS103- Final Project-Submission2"
+output:
+  pdf_document: default
+  html_document: default
+date: "2025-07-24"
+---
+```{r}
+library(tidyverse) 
+library(wesanderson)
+gene_data <- read.csv("QBS103_GSE157103_genes.csv")
+metadata_data <- read.csv("QBS103_GSE157103_series_matrix-1.csv")
+```
+
+
+
+```{r}
+ 
+formatted_titles <- function(title) { #I had to add a function to make each of the X, Y, and main titles have the first letter be uppercase and remove the underscores they have in the data set. 
+  title <- gsub("_", " ", title)   #replaces underscores with spaces
+  tools::toTitleCase(tolower(title)) #had to look up how to make sure only the first letter was uppercase- had chat.dartmouth help me format this line of code.        
+}
+
+
+plotting_func <- function(data, gene_list, cont_cov, cat_cov1, cat_cov2) { #creating our new function that takes the 5 arguments we need (data, gene_list, cont_cov, cat_cov1, and cat_cov2).
+  
+  
+ gene_long <- gene_data %>% #originally had this data-cleaning outside of the function, was not working so had to have chat.dartmouth correct my code by putting it inside the function to create data from the input of the arguments.
+    filter(X %in% gene_list) %>% #filters for only the rows of X in my gene_list
+    pivot_longer(cols = -X, names_to = "sample_ids", values_to = "expression") %>% #this is just pivoting to long format so that we can easily filter the names column for only the genes were looking at
+    rename(gene = X) #renaming column X to whatever gene we want to use. 
+  
+ 
+  gene_wide <- gene_long %>% #I originally didnt have the data in wide format but it wasnt displaying my plots- had to ask chat.dartmouth what was wrong and it added moving it back to a wide format
+    pivot_wider(names_from = gene, values_from = expression) %>% #copied code from Submission 1 that was similar. 
+    rename_with(~ paste0(.x, "_gene_expression"), -sample_ids) #I had to rename the columns to "gene"_gene_expression, but wasn't sure how to make it so that it did that to all columns except for the sample_id, so I had to ask chat.dartmouth how to do this in a saimple line. Basically is pasting _gene_expression with every column .x other than the sample ids. 
+  
+  
+  metadata_ready <- metadata_data %>%
+    select(subject_id = participant_id, all_of(c(cont_cov, cat_cov1, cat_cov2))) %>%
+    mutate(
+      !!cat_cov1 := as.factor(str_trim(tolower(as.character(.data[[cat_cov1]])))),   #mutating all of our covariants- I had this as multiple lines, but chat.dartmouth simplified it into one line using across(all_of) to clean each covariant by setting it as a character string to be able to make it all lower case and remove any spaces in the string, then make it back into a factor for plotting. Originally did not make it into a character, only a factor- but couldn't make lower case or remove spaces- had to ask chat.dartmouth what was wrong with my code. 
+          !!cat_cov2 := as.factor(str_trim(tolower(as.character(.data[[cat_cov2]])))),
+          !!cont_cov := ifelse(grepl("^[0-9.]+$", as.character(.data[[cont_cov]])),
+                         as.numeric(.data[[cont_cov]]),
+                         NA_real_))%>%  #kept having an error that says the age had NA values, had to ask chat.dartmouth how to address the NA values within the function using the cont_cov variable assigned witihn the function. 
+            filter(!(.data[[cat_cov1]] %in% c("unknown", "", NA))) %>%
+            filter(!(.data[[cat_cov2]] %in% c("unknown", "", NA))) %>%
+            filter(!is.na(.data[[cat_cov2]])) %>% 
+            filter(!is.na(.data[[cat_cov1]])) %>%# Explicitly remove NA in icu_status
+            drop_na() %>%
+           mutate(!!cat_cov1 := droplevels(.data[[cat_cov1]])) #even with the filter code, I still had to add another line of code to drop the NA values from the data for the boxplot- again, had to troubleshoot this with dartmouth.chat
+         #needed to treat unknown values as NAs- took this from my code from Submission 1 and put .data[cat_cov1/2] in place of previous covariant- created the plots but the NA values were still displaying for icu_status, and needed to remove them... I had chat.dartmouth help me with adding the dropping of the NA value code. 
+  
+#merging the metadata with the wide format of our gene_expression data so that we can use this for the plots. 
+  all_plot_data <- gene_wide %>%
+    left_join(metadata_ready, by = c("sample_ids" = "subject_id"))
+
+
+  my_plots <- list() # I did not originally initialize or have an empty list for my plots and plots did not display when the function was called- had to ask chat.dartmouth & it said to add this line in to initialize the list for plot storage. 
+  
+  for (gene in gene_list) {
+    gene_col <- paste0(gene, "_gene_expression") #this loop is to go through every gene name in the gene_list, and make a new column name with the gene inputed and _gene_expression. This is needed to create plots with multiple gene names. Also did not originally have this in the code- but asked chat.dartmouth how to make it so that I could add multiple genes, and it gave me this for-loop, which is similar to what we did in class. 
+    
+   plot_data <- all_plot_data %>% #creating my full plot data by checking one more time that my gene_col doesnt have NA values. 
+    drop_na(.data[[gene_col]]) %>%
+    filter(!is.na(.data[[cat_cov2]])) %>%
+    mutate(!!cat_cov2 := droplevels(.data[[cat_cov2]])) %>%
+    mutate(!!cat_cov1 := droplevels(.data[[cat_cov1]]))
+            #had to add this again down here because my boxplot was still showing NA values
+    
+    
+    # histogram plotting 
+    hist_plot <- ggplot(plot_data, aes(x = .data[[gene_col]])) +
+      geom_histogram(bins = 30, fill = wes_palette("Moonrise3")[1], color = "white") +
+      theme_classic() +
+      labs(title = paste(gene, "Gene Expression Per Sample"), x = "Gene Expression Level", y = "Counts / Expression in Samples")
+    #copied and pasted my code from Submission 1, but put the proper argument names in place- used paste similarly to the one in class to paste the input gene with gene expression per sample. 
+    
+
+    # scatterplot plotting
+    scatter_plot <- ggplot(plot_data, aes(x = .data[[cont_cov]], y = .data[[gene_col]])) +
+      geom_point(color = wes_palette("Moonrise3")[2]) +
+      theme_minimal() +
+      labs(title = paste(gene, "Gene Expression vs", formatted_titles(cont_cov)), x = formatted_titles(cont_cov), y = paste(gene, "Gene Expression"))
+    #also copied and pasted from my code from Submission 1 but used the correct names for whatever input it is. 
+    
+    # boxplot plotting
+   box_plot <- ggplot(plot_data, aes(x = .data[[cat_cov1]], y = .data[[gene_col]], fill = .data[[cat_cov2]])) +
+      geom_boxplot() +
+      theme_classic() +
+       scale_fill_manual(name = formatted_titles(cat_cov2), values = wes_palette("Moonrise3", n = length(unique(plot_data[[cat_cov2]])))) +
+      labs(title = paste(gene, "Gene Expression by", formatted_titles(cat_cov1), "and", formatted_titles(cat_cov2)), x = formatted_titles(cat_cov1), y = paste(gene, "Gene Expression"))
+    
+    
+    my_plots[[gene]] <- list(Histogram = hist_plot,  #similarly to the initialized plot lit above, chat.dartmouth told me to include this line for adding and storing the three plots for my gene into the my_plots list. 
+                              Scatterplot = scatter_plot,
+                              Boxplot = box_plot)
+  }
+  
+  return(my_plots) #will return the plots for each gene once the function has been completed/run.
+}
+```
+
+```{r}
+plots <- plotting_func(data = all_plot_data,     # code to call the function, with each parameter/argument. 
+                        gene_list = c("AAMP","ABCB10","AAR2"),
+                        cont_cov = "age",
+                        cat_cov1 = "sex",
+                        cat_cov2 = "icu_status"
+)
+
+gene_list <- c("AAMP","ABCB10","AAR2")
+
+for (gene in gene_list) { #loop to make all plots needed according to each gene in the gene list. 
+  print(plots[[gene]]$Histogram)
+  print(plots[[gene]]$Scatterplot)
+  print(plots[[gene]]$Boxplot)
+}
+
+
+```
+
+
+
