@@ -1,0 +1,250 @@
+---
+title: "QBS103-Final Project Final Submission"
+output:
+  pdf_document: default
+  html_document: default
+date: "2025-08-05"
+---
+
+```{r}
+#install.packages('tableone')
+library(tableone)
+#citation('tableone')
+library(dplyr)
+#citation('dplyr')
+library(knitr)
+#knitr_citation <- citation('knitr')
+#print(knitr_citation, bibtex= TRUE)
+library(kableExtra)
+#citation('kableExtra')
+library(tidyverse)
+#citation('tidyverse')
+library(ggplot2)
+#citation('ggplot2')
+library(gtsummary)
+#citation('gtsummary')
+library(tinytex)
+#tiny_citation <- citation('tinytex')
+#print(tiny_citation, bibtex= TRUE)
+library(pheatmap)
+#citation('pheatmap')
+
+gene_expression <- read.csv("QBS103_GSE157103_genes.csv")
+metadata_data <- read.csv("QBS103_GSE157103_series_matrix-1.csv")
+```
+
+
+```{r}
+
+my_genes <- c("AAMP", "A1BG", "A2M", "A2ML1", "A4GNT", "AAAS","AACS", "AADAC", "AAGAB", "AAK1") #list of my genes
+
+#This chunk is creating the gene expression data into long format- copied from my submission 2
+gene_long <- gene_expression %>%
+  filter(X %in% my_genes) %>%
+  pivot_longer(cols= -X, names_to= "sample_ids", values_to= "expression") %>%
+  rename(gene= X)
+
+#also copied this chunk from my submission 2- need to convert back to wide format.
+gene_wide <- gene_long %>%
+  pivot_wider(names_from= gene, values_from= expression) %>%
+  rename_with(~ paste0(.x, "_gene_expression"), -sample_ids)
+
+#created list for all covariants to easily place in table. 
+needed_covariates <- c("age", "sex", "icu_status", "mechanical_ventilation","ferritin.ng.ml.","lactate.mmol.l.") 
+
+#created cleaned_metadata using part of my code from submission 2, 
+#but selecting for subject_id, and all_of(needed_covariants).
+
+cleaned_metadata <- metadata_data %>%
+  select(subject_id= participant_id, all_of(needed_covariates)) %>%
+  mutate(across(all_of(needed_covariates), ~ { #needed help with this loop- had chat.dartmouth 
+    #to help mutating the covariants only if its a character, then to remove ., 
+    #but otherwise make it a character- needed dartmouth.chat to debug for me. 
+    if(is.character(.)) {
+      factor(str_to_title(str_trim(.)))
+    } else {
+      as.numeric(as.character(.))
+    }
+  })) %>%
+  filter(!is.na(age) & !sex %in% c("Unknown", "") & !is.na(icu_status)) %>%  #
+  droplevels() #used from submission 2 to remove NA from age, sex, and icu_status. 
+
+#taking the cleaned_metadata and cutting the age to display better in the graphs.  
+cleaned_metadata <- cleaned_metadata %>%
+  mutate(age= as.numeric(as.character(age)),
+    age_group= cut(age, breaks= seq(20, 80, by= 10), right= FALSE,
+    labels= c("20-29", "30-39", "40-49", "50-59", "60-69", "70-79")))
+
+# merged the gene_wide and cleaned_metadata
+full_data <- gene_wide %>%
+  left_join(cleaned_metadata, by= c("sample_ids"= "subject_id")) %>%
+  drop_na()
+
+#had to make the ferritin and lactate numeric values so we could use them in the summary table properly.
+#I originally didn't have this- asked chat.dartmouth what I needed to add and it said to 
+#ensure ferritin and lactate are numeric. Also cleaning to remove NA values. 
+full_data <- full_data %>%
+  mutate(
+    ferritin.ng.ml.= as.numeric(as.character(ferritin.ng.ml.)),
+    lactate.mmol.l.= as.numeric(as.character(lactate.mmol.l.))) %>%
+    filter(!is.na(age), !is.na(ferritin.ng.ml.), !is.na(lactate.mmol.l.))
+```
+```{r}
+#checking to see if continous variables are normally distributed-
+#none of them are. Will use median and IQR for summary table. 
+ggplot(full_data, aes(x= age)) +
+  geom_histogram(bins= 30, fill= "orchid1") +
+  theme_minimal()
+
+ggplot(full_data, aes(x= ferritin.ng.ml.)) +
+  geom_histogram(bins= 30, fill= "orchid1") +
+  theme_minimal()
+
+ggplot(full_data, aes(x= lactate.mmol.l.)) +
+  geom_histogram(bins= 30, fill= "orchid1") +
+  theme_minimal()
+```
+```{r}
+#install.packages("gtsummary")
+library(gtsummary)
+
+#I was originally using the 'tableone' packages, but could not get it to make my continuous covariates
+#to be non-normally distributed and give median& IQR- was not working at all- asked chat.dartmouth of other 
+#ways to summarize the data in a table with median and IQRs since all my continous variables were non-normally dist. 
+#said gtsummary package was good for making the calculating median and IQR within the table easier.
+
+stats_summary <- full_data %>%
+  select(age, ferritin.ng.ml., lactate.mmol.l., sex, icu_status, mechanical_ventilation) %>%
+  #selecting full_data for my categorical and continuous variables.
+  mutate(icu_status= factor(icu_status, levels= c("No", "Yes")), #originally did not have this, but ICU status levels were not all showing in table. 
+    mechanical_ventilation= factor(mechanical_ventilation, levels= c("No", "Yes")),
+    sex = factor(sex, levels= unique(sex))  #setting all categorical covariates with levels so they show in the table.
+  ) %>%
+  tbl_summary(by= sex, #stratifying by sex
+ #all_continous is a part of gtsummary that looks at numeric data, while categorical classifies things like factors.
+#takes data that looks continuous and returns the median(IQR), and categorical to give n(%)
+              statistic= list(all_continuous() ~ "{median} [{p25}, {p75}]", all_categorical() ~ "{n} ({p}%)"), 
+              digits= all_continuous() ~ 2,  #making sure medians are rounded.
+            #setting covariants to have proper titles. 
+              label= list(age= "Age", ferritin.ng.ml.= "Ferritin (ng/mL)",  lactate.mmol.l.= "Lactate (mmol/L)",
+                           icu_status= "ICU Status",mechanical_ventilation= "Mechanical Ventilation"))
+#also added to make sure all levels show for categorical covariates.
+stats_summary %>% as_kable_extra(caption= "Summary Table by Sex")
+
+stats_summary
+```
+
+
+```{r}
+#copied code chunks from my submission 1. 
+#try to bold the titles of the graphs and axis so it looks more publication ready. 
+
+#Histogram plot
+ggplot(full_data, aes(x= AAMP_gene_expression)) + 
+  geom_histogram(fill= 'orchid1', color = "white") + 
+  theme_classic() +
+  labs(title= "AAMP Gene Expression per Sample", x= "Gene Expression Level", y= "Counts in Samples")+
+  theme(plot.title= element_text(face= "bold"), axis.title.x= element_text(face= "bold"), axis.title.y= element_text(face= "bold"), panel.border= element_rect(colour= "black", fill= NA, linewidth= 1))
+
+#Scatterplot
+ggplot(full_data, aes(x= age, y= AAMP_gene_expression)) + 
+  geom_point(color= 'orchid1') + 
+  theme_minimal() +
+  labs(title= "AAMP Gene Expression vs. Age", x= "Age (years)", y= "AAMP Gene Expression")+
+  theme(plot.title= element_text(face= "bold"), axis.title.x= element_text(face= "bold"), axis.title.y= element_text(face= "bold"), panel.border= element_rect(colour= "black", fill= NA, linewidth = 1))
+
+# Boxplot
+ggplot(full_data, aes(x= sex, y= AAMP_gene_expression, fill= icu_status)) + 
+  geom_boxplot() +
+  theme_classic() +  
+  labs(title= "AAMP Gene Expression vs. Sex and ICU Status", x= "Sex", y= "AAMP Gene Expression") +
+  scale_fill_manual(name= "Subject ICU Status", values= c(Yes = 'orchid1', No = 'skyblue'))+
+  theme(plot.title= element_text(face = "bold"), axis.title.x= element_text(face= "bold"), axis.title.y= element_text(face= "bold"), panel.border= element_rect(colour= "black", fill= NA, linewidth= 1))
+
+```
+
+```{r}
+library(pheatmap)
+#data creating for heatmap genes in this code chunk. 
+
+#my 10 genes that I'll be using for the heatmap. 
+heatmap_genes <- c("AAMP_gene_expression", "A1BG_gene_expression", "A2M_gene_expression", "A2ML1_gene_expression", "A4GNT_gene_expression", "AAAS_gene_expression","AACS_gene_expression", "AADAC_gene_expression", "AAGAB_gene_expression",  "AAK1_gene_expression") 
+
+
+#code chunk creating the matrix we need for the heatmap (genes vs samples)
+#pretty much copied the layout of the in-class example matrix, but had chat.dartmouth
+#help me with some parts of the code/syntax.
+heatmap_matrix <- full_data %>%
+  select(all_of(heatmap_genes), sample_ids) %>%
+  drop_na() %>%
+  column_to_rownames(var= "sample_ids") %>%  # #originally did not have this- chat.dartmouth helped
+  #include this line so that we make sure the sample_ids were kept as row names to keep it as a header.
+  t() %>%   #transposing to change rows to columns, vise versa.
+  as.data.frame() #need to put into df format for turning it into a matrix.
+
+#converting into a matrix to use for heatmap, also making everything numeric.
+heatmap_matrix <- as.matrix(heatmap_matrix)
+mode(heatmap_matrix) <- "numeric" #I originally did not have this, and my heatmap wasn't displaying.
+#chat.dartmouth helped me with this line to ensure everythign was numeric so it would display.
+
+
+# originally did not have these lines- my plot wouldn't run- had chat.dartmouth
+#help me with these two lines by onyl keeping complete rows and columns and removing NA values. 
+heatmap_matrix <- heatmap_matrix[complete.cases(heatmap_matrix), ]
+heatmap_matrix <- heatmap_matrix[, colSums(is.na(heatmap_matrix)) == 0]
+
+# 2. Prepare sample annotation data frame
+heatmap_df <- full_data %>%
+  select(sample_ids, sex, icu_status) %>%
+  filter(sample_ids %in% colnames(heatmap_matrix)) %>%  # match samples
+  distinct(sample_ids, .keep_all= TRUE) %>%               # remove duplicates if any
+  column_to_rownames(var= "sample_ids")
+
+#cleaning data frame by removing the (.)- originally had things as characters-
+#needed chat.dartmouth's help debugging and using the everything() portion.
+#it also helped w telling me to change to factor. 
+heatmap_df <- heatmap_df %>%
+  mutate(across(everything(), ~ as.factor(str_to_title(str_trim(as.character(.))))))
+
+#changing the names to make them more neat/publication ready. 
+heatmap_df <- heatmap_df %>%
+  rename('ICU Status'= icu_status,
+         Sex= sex)
+
+# making heatmap colors so they're more easily put into the heatmap &I wanted specific colors :). 
+heatmap_colors <- list(
+  sex = c(Male= "skyblue", Female= "orchid1"),
+  icu_status = c(Yes= "tomato", No= "lightgreen")
+)
+
+# plot for heatmap- used some of the code from lecture,
+# but needed help with certain parameters like annotation_col, show_colnames from chat.dartmouth. 
+pheatmap(heatmap_matrix,
+         cluster_rows= TRUE,
+         cluster_cols= TRUE,
+         annotation_col= heatmap_df,
+         annotation_colors= heatmap_colors,
+         show_colnames= FALSE,
+         fontsize= 10,
+         main= "Gene Expression Heatmap with ICU Status and Sex")
+```
+
+```{r}
+#New plot type is a bubble plot looking at the AAMP gene expression over age, 
+#with ferritin as the bubble size. I knew I wanted to do a bubble plot but didn't
+#know how to make the covariate te bubble size- chat.dartmouth helped me with the scale_size part.
+
+ggplot(full_data, aes(x= age, y= AAMP_gene_expression, size= ferritin.ng.ml.)) +
+  geom_point(alpha= 0.7, color= "orchid1") + #originally didn't have alpha and the bubbles weren't transparent
+  #chat.dartmouth reminded me to add the alpha. 
+  theme_minimal() +
+  labs(title= "AAMP Gene Expression by Age vs. Ferritin Levels",
+       x= "Age (years)",
+       y= "AAMP Gene Expression",
+       size= "Ferritin (ng/mL) Levels") +
+   theme(plot.title= element_text(face= "bold"), axis.title.x= element_text(face= "bold"), axis.title.y= element_text(face= "bold"),panel.border= element_rect(colour= "black", fill= NA, linewidth= 1))
+
+```
+
+
+
